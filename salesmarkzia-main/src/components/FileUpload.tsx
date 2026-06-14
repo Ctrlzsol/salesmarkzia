@@ -190,12 +190,14 @@ interface FileUploadProps {
   onUpload: (data: SaleRecord[], filename?: string, mapping?: ColumnMapping) => void;
   isAnalyzing: boolean;
   clientName?: string;
+  /** Client logo URL – shown in the avatar next to the client name */
+  logoUrl?: string | null;
   // Last-confirmed mapping for this client, pre-applied in the preview.
   savedMapping?: ColumnMapping | null;
 }
 
 // ─── Component ────────────────────────────────────────────────────────
-export function FileUpload({ onUpload, isAnalyzing, clientName = "المركزية", savedMapping }: FileUploadProps) {
+export function FileUpload({ onUpload, isAnalyzing, clientName = "المركزية", logoUrl, savedMapping }: FileUploadProps) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [isDrag, setIsDrag] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -321,8 +323,12 @@ export function FileUpload({ onUpload, isAnalyzing, clientName = "المركزي
 
                 {/* Client */}
                 <div className="mt-5 flex items-center gap-3">
-                  <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-slate-900 shadow-lg">
-                    <span className="text-lg font-black text-white">م</span>
+                  <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-slate-900 shadow-lg overflow-hidden flex-shrink-0">
+                    {logoUrl ? (
+                      <img src={logoUrl} alt={clientName} className="w-full h-full object-cover" />
+                    ) : (
+                      <span className="text-lg font-black text-white">{clientName?.trim().charAt(0) || "م"}</span>
+                    )}
                   </div>
                   <div className="leading-tight">
                     <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-400">العميل</p>

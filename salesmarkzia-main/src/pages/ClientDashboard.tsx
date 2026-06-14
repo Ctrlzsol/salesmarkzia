@@ -396,7 +396,7 @@ export function ClientDashboard() {
           <PlusCircle className="h-4 w-4" />
           إدخال يدوي
         </button>
-        <FileUpload onUpload={handleAdminUpload} isAnalyzing={saving} clientName={client?.name || "العميل"} savedMapping={client?.columnMapping ?? null} />
+        <FileUpload onUpload={handleAdminUpload} isAnalyzing={saving} clientName={client?.name || "العميل"} logoUrl={client?.logoUrl ?? null} savedMapping={client?.columnMapping ?? null} />
         {showManual && (
           <ManualEntry
             clientName={client?.name || "العميل"}

@@ -230,7 +230,7 @@ export function createApiRouter(): Router {
     }
   });
 
-  r.delete("/batches/:id", verifyCsrf, requireAdmin, async (req, res) => {
+  r.delete("/batches/:id", verifyCsrf, async (req, res) => {
     const id = parseInt(req.params.id, 10);
     if (isNaN(id)) {
       res.status(400).json({ error: "معرف غير صالح" });
