@@ -6,6 +6,7 @@ import { BITab }         from "./BITab";
 import { AITab }         from "./AITab";
 import { QualityTab }    from "./QualityTab";
 import { ComparisonTab } from "./ComparisonTab";
+import { BatchesTab }    from "./BatchesTab";
 import { formatCurrency } from "../lib/utils";
 import {
   LayoutDashboard, Activity, BarChart2, BrainCircuit, ShieldCheck,
@@ -33,6 +34,15 @@ interface FilterStates {
   onClearAll: () => void;
 }
 
+interface BatchInfo {
+  id: number;
+  filename: string | null;
+  uploadedAt: string;
+  rowCount: number;
+  firstDay: string | null;
+  lastDay: string | null;
+}
+
 interface LayoutProps {
   data: DashboardData;
   records: SaleRecord[];
@@ -47,6 +57,8 @@ interface LayoutProps {
   onHome?: () => void;
   onExportExcel?: () => void;
   onExportPdf?: () => Promise<void> | void;
+  batches?: BatchInfo[];
+  onDeleteBatch?: (id: number) => Promise<void> | void;
 }
 
 const TABS = [
@@ -56,6 +68,7 @@ const TABS = [
   { id:"bi",          label:"ذكاء الأعمال",        icon:BarChart2,       color:"#D97706" },
   { id:"ai",          label:"توصيات ذكاء اصطناعي",icon:BrainCircuit,    color:"#7C3AED" },
   { id:"quality",     label:"جودة البيانات",       icon:ShieldCheck,     color:"#0891B2" },
+  { id:"batches",     label:"الكشوف والملفات",    icon:Layers,          color:"#EC4899" },
 ];
 
 const SCENARIOS = [
@@ -69,7 +82,7 @@ const SCENARIOS = [
 const BRANCH_LABELS: Record<string,string> = { G:"الجاردنز", K:"خلدا", O:"اضاحي / أخرى" };
 const MONTHS_AR = ["يناير","فبراير","مارس","أبريل","مايو","يونيو","يوليو","أغسطس","سبتمبر","أكتوبر","نوفمبر","ديسمبر"];
 
-export function Layout({ data, records, client, onReset, onManualEntry, onUpdateRecord, scenario, setScenario, filterStates, isAdmin = false, onHome, onExportExcel, onExportPdf }: LayoutProps) {
+export function Layout({ data, records, client, onReset, onManualEntry, onUpdateRecord, scenario, setScenario, filterStates, isAdmin = false, onHome, onExportExcel, onExportPdf, batches = [], onDeleteBatch }: LayoutProps) {
   const [activeTab, setActiveTab]   = useState("overview");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [pdfLoading, setPdfLoading] = useState(false);
@@ -103,6 +116,7 @@ export function Layout({ data, records, client, onReset, onManualEntry, onUpdate
       case "bi":          return <BITab          data={data} />;
       case "ai":          return <AITab          data={data} />;
       case "quality":     return <QualityTab     data={data} records={records} onUpdateRecord={onUpdateRecord} />;
+      case "batches":     return <BatchesTab     batches={batches} filterBatch={filterBatch} setFilterBatch={setFilterBatch} isAdmin={isAdmin} onDeleteBatch={onDeleteBatch} />;
       default:            return <OverviewTab    data={data} />;
     }
   };
@@ -114,73 +128,86 @@ export function Layout({ data, records, client, onReset, onManualEntry, onUpdate
       {/* Mobile overlay */}
       <AnimatePresence>
         {sidebarOpen && (
-          <motion.div initial={{ opacity:0 }} animate={{ opacity:1 }} exit={{ opacity:0 }}
-            className="fixed inset-0 z-20 bg-black/50 backdrop-blur-sm lg:hidden"
+          <div className="fixed inset-0 z-20 bg-black/50 backdrop-blur-sm lg:hidden"
             onClick={() => setSidebarOpen(false)} />
         )}
       </AnimatePresence>
 
       {/* ═══════ SIDEBAR ═══════ */}
       <aside className={`fixed lg:static inset-y-0 right-0 z-30 w-64 flex-shrink-0 flex flex-col
-          bg-gradient-to-b from-[#1d1e26] via-[#16171d] to-[#0f1014] text-white transition-transform duration-300
-          ${sidebarOpen ? "translate-x-0" : "translate-x-full"} lg:translate-x-0`}>
+          bg-gradient-to-b from-[#1c1d24] via-[#14151b] to-[#0d0e12] text-white transition-transform duration-300
+          ${sidebarOpen ? "translate-x-0" : "translate-x-full"} lg:translate-x-0 border-l border-white/5`}>
 
-        {/* Brand */}
-        <div className="px-5 pt-5 pb-4 border-b border-white/10">
+        {/* Brand: App Name */}
+        <div className="px-5 pt-6 pb-4 border-b border-white/10 bg-black/15">
           {/* Mobile close */}
-          <div className="flex items-center justify-end mb-3 lg:hidden">
-            <button className="text-slate-400 hover:text-white flex-shrink-0" onClick={() => setSidebarOpen(false)}>
+          <div className="flex items-center justify-between mb-4 lg:hidden">
+            <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">القائمة الجانبية</span>
+            <button className="text-slate-400 hover:text-white flex-shrink-0 p-1 rounded-lg hover:bg-white/5" onClick={() => setSidebarOpen(false)}>
               <X className="w-4 h-4" />
             </button>
           </div>
-          {/* Client brand: logo + name */}
-          <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-xl overflow-hidden flex items-center justify-center flex-shrink-0 shadow-lg ring-1 ring-white/15 bg-white/10">
-              {client?.logoUrl ? (
-                <img src={client.logoUrl} alt={client.name} className="w-full h-full object-cover" />
-              ) : (
-                <span className="text-white font-black text-lg">{client?.name?.trim().charAt(0) || "م"}</span>
-              )}
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-white font-black text-sm leading-tight truncate">{client?.name || "العميل"}</p>
-              <p className="text-slate-400 text-[10px] font-bold mt-0.5">لوحة المعلومات</p>
-            </div>
+          
+          <div className="flex flex-col gap-1">
+            <h2 className="text-blue-400 text-[10px] font-black tracking-widest leading-none">نظام كانفاس الذكي</h2>
+            <h1 className="text-white text-base font-black leading-tight tracking-wide mt-1">لتحليل المبيعات</h1>
+          </div>
+        </div>
+
+        {/* Client Profile Info */}
+        <div className="px-5 py-4 border-b border-white/10 flex items-center gap-3 bg-white/[0.02]">
+          <div className="w-10 h-10 rounded-xl overflow-hidden flex items-center justify-center flex-shrink-0 shadow-md ring-2 ring-white/10 bg-white/5">
+            {client?.logoUrl ? (
+              <img src={client.logoUrl} alt={client.name} className="w-full h-full object-cover" />
+            ) : (
+              <span className="text-white font-black text-base">{client?.name?.trim().charAt(0) || "م"}</span>
+            )}
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-slate-200 text-xs font-black leading-tight truncate">{client?.name || "العميل"}</p>
+            <span className="inline-flex items-center gap-1 rounded bg-blue-500/10 border border-blue-500/20 px-1.5 py-0.5 text-[9px] font-black text-blue-300 mt-1">
+              <span className="h-1.5 w-1.5 rounded-full bg-blue-400 animate-pulse" /> لوحة التحليل النشطة
+            </span>
           </div>
         </div>
 
         {/* Total Revenue Widget */}
-        <div className="px-4 py-3 border-b border-white/10">
-          <div className="rounded-xl bg-gradient-to-br from-blue-600 to-indigo-600 p-3.5">
-            <p className="text-blue-100 text-[10px] font-bold mb-1.5">إجمالي الإيرادات</p>
-            <p className="text-white font-black text-lg leading-none">{formatCurrency(kpis.totalSales)}</p>
-            <div className="flex items-center gap-1.5 mt-2">
+        <div className="px-5 py-4 border-b border-white/10 bg-white/[0.01]">
+          <div className="rounded-2xl border border-white/10 bg-gradient-to-br from-blue-600 to-indigo-700 p-4 shadow-lg shadow-blue-900/20 relative overflow-hidden">
+            {/* Glossy overlay */}
+            <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-white/15 via-transparent to-transparent pointer-events-none" />
+            
+            <p className="text-blue-100/80 text-[10px] font-bold tracking-wider mb-1.5">إجمالي مبيعات الفترة</p>
+            <p className="text-white font-black text-2xl tracking-tight leading-none font-sans">{formatCurrency(kpis.totalSales)}</p>
+            
+            <div className="flex items-center gap-1.5 mt-3">
               {hasMoM ? (
-                <>
-                  {moGrowth >= 0
-                    ? <TrendingUp  className="w-3 h-3 text-emerald-300" />
-                    : <TrendingDown className="w-3 h-3 text-red-300" />}
-                  <span className={`text-[11px] font-bold ${moGrowth >= 0 ? "text-emerald-300" : "text-red-300"}`}>
-                    {moGrowth >= 0 ? "+" : ""}{(moGrowth * 100).toFixed(1)}٪ نمو شهري
-                  </span>
-                </>
+                <div className={`inline-flex items-center gap-1 rounded-lg px-2 py-0.5 text-[10px] font-black
+                  ${moGrowth >= 0 ? "bg-emerald-500/20 text-emerald-300" : "bg-red-500/20 text-red-300"}`}>
+                  {moGrowth >= 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+                  <span>{moGrowth >= 0 ? "+" : ""}{(moGrowth * 100).toFixed(1)}٪ شهرياً</span>
+                </div>
               ) : (
-                <>
-                  <CalendarDays className="w-3 h-3 text-blue-200" />
-                  <span className="text-[11px] font-bold text-blue-100">
-                    تحليل {kpis.activeDays} يوم
-                  </span>
-                </>
+                <div className="inline-flex items-center gap-1 rounded-lg bg-white/10 px-2 py-0.5 text-[10px] font-black text-blue-200">
+                  <CalendarDays className="w-3 h-3" />
+                  <span>{kpis.activeDays} يوم تحليل</span>
+                </div>
               )}
             </div>
           </div>
-          <div className={`grid gap-2 mt-2 ${topBranches.length >= 3 ? "grid-cols-3" : "grid-cols-2"}`}>
+
+          {/* Top branches snippet */}
+          <div className={`grid gap-1.5 mt-3 ${topBranches.length >= 3 ? "grid-cols-3" : "grid-cols-2"}`}>
             {topBranches.map((b, i) => {
-              const colors = ["text-blue-400","text-teal-400","text-violet-400"];
+              const borderColors = ["border-blue-500/20","border-emerald-500/20","border-violet-500/20"];
+              const dotColors = ["bg-blue-400","bg-emerald-400","bg-violet-400"];
               return (
-                <div key={b.name} className="rounded-lg bg-white/5 p-2">
-                  <p className={`text-[9px] font-bold ${colors[i] ?? "text-slate-400"} mb-0.5 truncate`}>{b.name}</p>
-                  <p className="text-white font-black text-[10px]">{formatCurrency(b.value)}</p>
+                <div key={b.name} className={`rounded-xl border ${borderColors[i] || "border-white/5"} bg-white/3 p-2 text-right`}>
+                  <div className="flex items-center gap-1 mb-0.5">
+                    <span className={`h-1.5 w-1.5 rounded-full ${dotColors[i] || "bg-slate-400"}`} />
+                    <p className="text-slate-400 font-bold text-[9px] truncate">{b.name}</p>
+                  </div>
+                  <p className="text-slate-100 font-black text-[11px] font-sans">{formatCurrency(b.value)}</p>
                 </div>
               );
             })}
@@ -188,90 +215,102 @@ export function Layout({ data, records, client, onReset, onManualEntry, onUpdate
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 px-3 py-3 overflow-y-auto space-y-0.5">
-          <p className="text-slate-500 text-[9px] font-bold tracking-widest uppercase px-3 mb-2">لوحات التحليل</p>
+        <nav className="flex-1 px-3 py-4 overflow-y-auto space-y-1">
+          <p className="text-slate-500 text-[9px] font-black tracking-widest uppercase px-3.5 mb-2.5">لوحات التحليل</p>
           {TABS.map(tab => {
             const Icon = tab.icon;
             const active = activeTab === tab.id;
             return (
               <button key={tab.id}
                 onClick={() => { setActiveTab(tab.id); setSidebarOpen(false); }}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-right transition-all ${active ? "bg-white/10 text-white" : "text-slate-400 hover:text-white hover:bg-white/5"}`}>
-                <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
-                  style={{ background: active ? `${tab.color}30` : "rgba(255,255,255,0.05)" }}>
-                  <Icon className="w-3.5 h-3.5" style={{ color: active ? tab.color : undefined }} />
+                className={`w-full flex items-center gap-3.5 px-3.5 py-2.5 rounded-xl text-right transition-all duration-200 border-r-2
+                  ${active 
+                    ? "bg-gradient-to-l from-white/8 via-white/4 to-transparent text-white border-blue-500 shadow-inner" 
+                    : "text-slate-400 hover:text-slate-200 border-transparent hover:bg-white/3"}`}>
+                <div className="w-8 h-8 rounded-xl flex items-center justify-center flex-shrink-0 transition-transform duration-200 group-hover:scale-105"
+                  style={{ background: active ? `${tab.color}25` : "rgba(255,255,255,0.04)" }}>
+                  <Icon className="w-4 h-4" style={{ color: active ? tab.color : "#94a3b8" }} />
                 </div>
-                <span className="text-sm font-bold">{tab.label}</span>
-                {active && <div className="mr-auto w-1.5 h-1.5 rounded-full" style={{ background: tab.color }} />}
+                <span className="text-xs font-black">{tab.label}</span>
+                {active && <div className="mr-auto w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />}
               </button>
             );
           })}
         </nav>
 
-        {/* Scenario Selector */}
-        <div className="px-3 py-3 border-t border-white/10">
-          <p className="text-slate-500 text-[9px] font-bold tracking-widest uppercase px-1 mb-2">سيناريو التوقعات</p>
+        {/* Projections Scenario Selector */}
+        <div className="px-5 py-4 border-t border-white/10 bg-white/[0.01]">
+          <p className="text-slate-450 text-[9px] font-black tracking-wider uppercase px-1 mb-2.5">سيناريو التوقعات المستقبلية</p>
           <div className="relative">
             <select value={scenario} onChange={e => setScenario(parseFloat(e.target.value))}
-              className="w-full rounded-xl px-3 py-2.5 text-xs font-bold appearance-none outline-none bg-white/7 text-slate-200 border border-white/10 hover:border-white/20 transition-colors cursor-pointer"
-              style={{ background:"rgba(255,255,255,0.07)" }}>
-              {SCENARIOS.map(s => <option key={s.value} value={s.value} style={{ background:"#1e293b" }}>{s.label}</option>)}
+              className="w-full rounded-xl pr-3.5 pl-8 py-2.5 text-[11px] font-black appearance-none outline-none text-slate-200 border border-white/10 hover:border-white/20 hover:bg-white/5 transition-all cursor-pointer focus:ring-1 focus:ring-blue-500"
+              style={{ background: "rgba(255,255,255,0.06)" }}>
+              {SCENARIOS.map(s => <option key={s.value} value={s.value} style={{ background: "#14151a", color: "#cbd5e1" }}>{s.label}</option>)}
             </select>
-            <ChevronDown className="absolute left-3 top-3 w-3 h-3 text-slate-500 pointer-events-none" />
+            <ChevronDown className="absolute left-3.5 top-3.5 w-3 h-3 text-slate-455 pointer-events-none" />
           </div>
         </div>
 
         {/* Quick stats + Reset */}
-        <div className="px-3 pb-4 space-y-2 border-t border-white/10 pt-3">
-          <div className="flex items-center justify-between text-[10px]">
-            <span className="text-slate-500 font-bold">عدد السجلات</span>
-            <span className="text-slate-300 font-black">{records.length.toLocaleString()}</span>
-          </div>
-          <div className="flex items-center justify-between text-[10px]">
-            <span className="text-slate-500 font-bold">أفضل يوم</span>
-            <span className="text-slate-300 font-black">{kpis.bestDay}</span>
+        <div className="px-5 pb-6 pt-4 space-y-3 border-t border-white/10 bg-black/10 mt-auto">
+          {/* Quick stats */}
+          <div className="space-y-1.5 border-b border-white/5 pb-3">
+            <div className="flex items-center justify-between text-[10px]">
+              <span className="text-slate-455 font-bold">إجمالي السجلات</span>
+              <span className="text-slate-200 font-black font-sans">{records.length.toLocaleString()}</span>
+            </div>
+            <div className="flex items-center justify-between text-[10px]">
+              <span className="text-slate-455 font-bold">اليوم الأعلى مبيعاً</span>
+              <span className="text-slate-200 font-black">{kpis.bestDay}</span>
+            </div>
           </div>
 
+          {/* Export actions */}
           {(onExportExcel || onExportPdf) && (
-            <div className="grid grid-cols-2 gap-2 pt-1">
+            <div className="grid grid-cols-2 gap-2">
               {onExportExcel && (
                 <button onClick={onExportExcel}
                   title="تصدير Excel"
-                  className="flex items-center justify-center gap-1.5 px-2 py-2 rounded-xl text-[11px] font-bold transition-all bg-emerald-600/90 hover:bg-emerald-500 text-white">
+                  className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-[11px] font-black transition-all bg-emerald-600 hover:bg-emerald-500 hover:-translate-y-0.5 text-white shadow shadow-emerald-900/30">
                   <FileSpreadsheet className="w-3.5 h-3.5" />
-                  Excel
+                  إكسل
                 </button>
               )}
               {onExportPdf && (
                 <button onClick={handlePdf} disabled={pdfLoading}
                   title="تصدير PDF"
-                  className="flex items-center justify-center gap-1.5 px-2 py-2 rounded-xl text-[11px] font-bold transition-all bg-red-600/90 hover:bg-red-500 text-white disabled:opacity-60 disabled:cursor-wait">
+                  className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-[11px] font-black transition-all bg-red-650 hover:bg-red-500 hover:-translate-y-0.5 text-white disabled:opacity-60 disabled:cursor-wait shadow shadow-red-900/30">
                   {pdfLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileText className="w-3.5 h-3.5" />}
-                  PDF
+                  تقرير PDF
                 </button>
               )}
             </div>
           )}
 
-          <button onClick={onReset}
-            className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-xs font-bold transition-all bg-blue-600 hover:bg-blue-500 text-white mt-1">
-            <Upload className="w-3.5 h-3.5" />
-            رفع بيانات جديدة
-          </button>
-          {onManualEntry && (
-            <button onClick={onManualEntry}
-              className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-xs font-bold transition-all bg-white/10 hover:bg-white/15 text-white mt-1">
-              <PlusCircle className="w-3.5 h-3.5" />
-              إدخال يدوي
+          {/* Action buttons */}
+          <div className="space-y-1.5">
+            <button onClick={onReset}
+              className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-[11px] font-black transition-all bg-blue-600 hover:bg-blue-500 hover:-translate-y-0.5 text-white shadow shadow-blue-900/20">
+              <Upload className="w-3.5 h-3.5" />
+              رفع كشوف جديدة
             </button>
-          )}
-          {isAdmin && onHome && (
-            <button onClick={onHome}
-              className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-xs font-bold transition-all hover:bg-white/10 text-slate-300 border border-white/10 mt-1">
-              <Home className="w-3.5 h-3.5" />
-              كل العملاء
-            </button>
-          )}
+            
+            {onManualEntry && (
+              <button onClick={onManualEntry}
+                className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-[11px] font-black transition-all bg-white/8 hover:bg-white/12 text-slate-100 shadow border border-white/5">
+                <PlusCircle className="w-3.5 h-3.5" />
+                إدخال يدوي ديناميكي
+              </button>
+            )}
+            
+            {isAdmin && onHome && (
+              <button onClick={onHome}
+                className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-[11px] font-black transition-all hover:bg-white/5 text-slate-400 hover:text-slate-200 border border-white/10 mt-1">
+                <Home className="w-3.5 h-3.5" />
+                قائمة جميع العملاء
+              </button>
+            )}
+          </div>
         </div>
       </aside>
 

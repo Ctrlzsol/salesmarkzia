@@ -376,3 +376,8 @@ export async function insertBatch(
     return batch;
   });
 }
+
+export async function deleteBatch(id: number) {
+  const [deleted] = await db.delete(uploadBatches).where(eq(uploadBatches.id, id)).returning();
+  return deleted ?? null;
+}

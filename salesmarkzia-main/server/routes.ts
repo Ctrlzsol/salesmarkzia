@@ -230,5 +230,24 @@ export function createApiRouter(): Router {
     }
   });
 
+  r.delete("/batches/:id", verifyCsrf, requireAdmin, async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) {
+      res.status(400).json({ error: "معرف غير صالح" });
+      return;
+    }
+    try {
+      const deleted = await storage.deleteBatch(id);
+      if (!deleted) {
+        res.status(404).json({ error: "الكشف غير موجود" });
+        return;
+      }
+      res.json({ ok: true });
+    } catch (e: any) {
+      console.error("deleteBatch error:", e?.message || e);
+      res.status(500).json({ error: "تعذر حذف الكشف" });
+    }
+  });
+
   return r;
 }

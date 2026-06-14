@@ -1,7 +1,10 @@
-import React, { useMemo, useState } from "react";
-import { motion } from "motion/react";
+import React, { useState } from "react";
+import { motion, AnimatePresence } from "motion/react";
 import { SaleRecord } from "../types";
-import { X, Loader2, Save, PlusCircle, Trash2, Plus, Check } from "lucide-react";
+import { X, Loader2, Save, Plus, Trash2, CheckCircle2, AlertTriangle, Table2, Info } from "lucide-react";
+import * as XLSX from "xlsx";
+import { analyzeWorkbook, type WorkbookPreview } from "../lib/parseWorkbook";
+import { ImportPreview } from "./ImportPreview";
 
 interface Props {
   clientName: string;
@@ -10,290 +13,316 @@ interface Props {
   onClose: () => void;
 }
 
-const BRANCHES: { code: string; ar: string }[] = [
-  { code: "G", ar: "الجاردنز" },
-  { code: "K", ar: "خلدا" },
-  { code: "O", ar: "اضاحي / أخرى" },
-];
-const CATS: { code: string; ar: string }[] = [
-  { code: "R", ar: "صالة - حضوري" },
-  { code: "A", ar: "تطبيقات توصيل" },
-];
-const DAYS_EN = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const DAY_AR: Record<string, string> = {
-  Sun: "الأحد", Mon: "الاثنين", Tue: "الثلاثاء", Wed: "الأربعاء", Thu: "الخميس", Fri: "الجمعة", Sat: "السبت",
-};
-
-// The eight payment channels (بنود) — mirror of the parser's SaleRecord money
-// fields. The client toggles which ones appear as columns in the grid.
-const PAYMENTS: { key: string; label: string }[] = [
-  { key: "cash", label: "كاش" },
-  { key: "visa", label: "فيزا / بطاقة" },
-  { key: "klik", label: "كلِك (CliQ)" },
-  { key: "orders", label: "طلبات" },
-  { key: "cream", label: "كريم" },
-  { key: "ashyaei", label: "أشيائي" },
-  { key: "callcenter", label: "كول سنتر" },
-  { key: "other", label: "أخرى" },
-];
-
-interface GridRow {
-  id: string;
-  date: string;
-  branch: string;
-  cat: string;
-  cashier: string;
-  dept: string;
-  amounts: Record<string, string>;
-}
-
-const num = (v: string) => { const n = parseFloat(v); return isNaN(n) ? 0 : Math.abs(n); };
-const rowTotal = (r: GridRow) => PAYMENTS.reduce((s, p) => s + num(r.amounts[p.key] || ""), 0);
-
-let rowCounter = 0;
-const blankRow = (seed?: Partial<GridRow>): GridRow => ({
-  id: `r${Date.now()}-${rowCounter++}`,
-  date: seed?.date || new Date().toISOString().slice(0, 10),
-  branch: seed?.branch || "G",
-  cat: seed?.cat || "R",
-  cashier: "",
-  dept: "",
-  amounts: {},
-});
+const DEFAULT_HEADERS = ["التاريخ", "الفرع", "كاش", "فيزا", "القسم"];
 
 export function ManualEntry({ clientName, saving, onSubmit, onClose }: Props) {
-  // Client chooses which بنود (channels) to use; default to the two most common.
-  const [activeChannels, setActiveChannels] = useState<string[]>(["cash", "visa"]);
-  const [rows, setRows] = useState<GridRow[]>(() => [blankRow(), blankRow(), blankRow()]);
+  const [headers, setHeaders] = useState<string[]>(DEFAULT_HEADERS);
+  const [rows, setRows] = useState<string[][]>(() => [
+    ["", "", "", "", ""],
+    ["", "", "", "", ""],
+    ["", "", "", "", ""],
+  ]);
   const [err, setErr] = useState<string | null>(null);
 
-  const toggleChannel = (key: string) =>
-    setActiveChannels(prev =>
-      prev.includes(key) ? (prev.length > 1 ? prev.filter(k => k !== key) : prev) : [...prev, key]
-    );
+  // In-memory workbook states for the ImportPreview component
+  const [preview, setPreview] = useState<WorkbookPreview | null>(null);
+  const [workbook, setWorkbook] = useState<XLSX.WorkBook | null>(null);
 
-  const updateRow = (id: string, patch: Partial<GridRow>) =>
-    setRows(prev => prev.map(r => (r.id === id ? { ...r, ...patch } : r)));
-
-  const updateAmount = (id: string, key: string, value: string) =>
-    setRows(prev => prev.map(r => (r.id === id ? { ...r, amounts: { ...r.amounts, [key]: value } } : r)));
-
-  const addRow = () =>
-    setRows(prev => {
-      const last = prev[prev.length - 1];
-      return [...prev, blankRow(last ? { date: last.date, branch: last.branch, cat: last.cat } : undefined)];
-    });
-
-  const removeRow = (id: string) =>
-    setRows(prev => (prev.length > 1 ? prev.filter(r => r.id !== id) : prev));
-
-  const orderedChannels = useMemo(
-    () => PAYMENTS.filter(p => activeChannels.includes(p.key)),
-    [activeChannels]
-  );
-
-  const grandTotal = useMemo(() => rows.reduce((s, r) => s + rowTotal(r), 0), [rows]);
-  const filledCount = useMemo(() => rows.filter(r => rowTotal(r) > 0).length, [rows]);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // Add Column
+  const addColumn = () => {
+    setHeaders(prev => [...prev, `عمود جديد ${prev.length + 1}`]);
+    setRows(prev => prev.map(r => [...r, ""]));
     setErr(null);
-
-    const usable = rows.filter(r => rowTotal(r) > 0);
-    if (usable.length === 0) {
-      setErr("أدخل قيمة واحدة على الأقل من البنود في صف واحد على الأقل.");
-      return;
-    }
-    if (usable.some(r => !r.date)) {
-      setErr("التاريخ مطلوب في كل صف يحتوي على قيم.");
-      return;
-    }
-
-    const records: SaleRecord[] = usable.map((r, i) => {
-      // Anchor at LOCAL noon so the calendar day never drifts across timezones
-      // (the same invariant the Excel parser enforces).
-      const [y, m, d] = r.date.split("-").map(Number);
-      const dt = new Date(y, m - 1, d, 12, 0, 0, 0);
-      const dayKey = DAYS_EN[dt.getDay()];
-      const branchAr = BRANCHES.find(b => b.code === r.branch)?.ar ?? r.branch;
-      const catAr = CATS.find(c => c.code === r.cat)?.ar ?? "صالة";
-      const cashierName = r.cashier.trim() || "عام";
-      const deptName = r.dept.trim() || "عام";
-      return {
-        id: `manual-${Date.now()}-${i}`,
-        day: dayKey,
-        dayAr: DAY_AR[dayKey] ?? dayKey,
-        cat: r.cat, catAr,
-        date: dt.toISOString(),
-        branch: r.branch, branchAr,
-        cashier: cashierName, cashierAr: cashierName,
-        dept: deptName, deptAr: deptName,
-        visa: num(r.amounts.visa || ""),
-        cash: num(r.amounts.cash || ""),
-        klik: num(r.amounts.klik || ""),
-        orders: num(r.amounts.orders || ""),
-        cream: num(r.amounts.cream || ""),
-        ashyaei: num(r.amounts.ashyaei || ""),
-        callcenter: num(r.amounts.callcenter || ""),
-        other: num(r.amounts.other || ""),
-        total: rowTotal(r),
-        sheetName: "إدخال يدوي",
-      };
-    });
-    await onSubmit(records);
   };
 
-  const inputCls =
-    "w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs font-bold text-slate-800 outline-none transition-all focus:border-blue-400";
+  // Remove Column
+  const removeColumn = (colIdx: number) => {
+    if (headers.length <= 1) {
+      setErr("يجب أن يحتوي الجدول على عمود واحد على الأقل.");
+      return;
+    }
+    setHeaders(prev => prev.filter((_, idx) => idx !== colIdx));
+    setRows(prev => prev.map(r => r.filter((_, idx) => idx !== colIdx)));
+    setErr(null);
+  };
+
+  // Update Header Name
+  const updateHeader = (colIdx: number, val: string) => {
+    setHeaders(prev => prev.map((h, idx) => (idx === colIdx ? val : h)));
+    setErr(null);
+  };
+
+  // Add Row
+  const addRow = () => {
+    setRows(prev => [...prev, Array(headers.length).fill("")]);
+    setErr(null);
+  };
+
+  // Remove Row
+  const removeRow = (rowIdx: number) => {
+    if (rows.length <= 1) {
+      setErr("يجب أن يحتوي الجدول على صف واحد على الأقل.");
+      return;
+    }
+    setRows(prev => prev.filter((_, idx) => idx !== rowIdx));
+    setErr(null);
+  };
+
+  // Update Cell Value
+  const updateCell = (rowIdx: number, colIdx: number, val: string) => {
+    setRows(prev =>
+      prev.map((r, rIdx) =>
+        rIdx === rowIdx ? r.map((c, cIdx) => (cIdx === colIdx ? val : c)) : r
+      )
+    );
+    setErr(null);
+  };
+
+  // Clear Grid
+  const clearGrid = () => {
+    if (window.confirm("هل أنت متأكد من تفريغ كافة البيانات؟")) {
+      setHeaders(DEFAULT_HEADERS);
+      setRows([
+        ["", "", "", "", ""],
+        ["", "", "", "", ""],
+        ["", "", "", "", ""],
+      ]);
+      setErr(null);
+    }
+  };
+
+  // Proceed to Preview
+  const handleProceedToPreview = () => {
+    setErr(null);
+
+    // Clean headers and detect duplicates
+    const cleanHeaders = headers.map(h => h.trim());
+    if (cleanHeaders.some(h => !h)) {
+      setErr("لا يمكن ترك اسم العمود فارغاً.");
+      return;
+    }
+    const uniques = new Set(cleanHeaders);
+    if (uniques.size !== cleanHeaders.length) {
+      setErr("يوجد أسماء أعمدة مكررة، يرجى كتابة اسم فريد لكل عمود.");
+      return;
+    }
+
+    // Check if there is any data
+    const hasData = rows.some(r => r.some(c => c.trim() !== ""));
+    if (!hasData) {
+      setErr("الرجاء إدخال بيانات في صف واحد على الأقل قبل المتابعة.");
+      return;
+    }
+
+    // Filter out completely empty rows
+    const filledRows = rows.filter(r => r.some(c => c.trim() !== ""));
+
+    try {
+      // Create SheetJS Worksheet
+      const dataAOA = [cleanHeaders, ...filledRows];
+      const worksheet = XLSX.utils.aoa_to_sheet(dataAOA);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, worksheet, "إدخال يدوي");
+
+      // Analyze the in-memory workbook
+      const analysis = analyzeWorkbook(wb);
+
+      if (analysis.sheets.length === 0 || analysis.sheets[0].rowCount === 0) {
+        setErr("فشل في تحليل البيانات المدخلة. تأكد من صحة القيم.");
+        return;
+      }
+
+      setWorkbook(wb);
+      setPreview(analysis);
+    } catch (e: any) {
+      console.error(e);
+      setErr("حدث خطأ أثناء معالجة الجدول: " + (e?.message || e));
+    }
+  };
+
+  const cancelPreview = () => {
+    setPreview(null);
+    setWorkbook(null);
+  };
+
+  // Render ImportPreview overlay if workbook is analyzed
+  if (preview && workbook) {
+    return (
+      <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-50">
+        <ImportPreview
+          preview={preview}
+          workbook={workbook}
+          fileName="إدخال يدوي"
+          saving={saving}
+          savedMapping={null}
+          onConfirm={(records) => {
+            onSubmit(records);
+          }}
+          onCancel={cancelPreview}
+        />
+      </div>
+    );
+  }
 
   return (
-    <div dir="rtl" className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
+    <div dir="rtl" className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-md"
       style={{ fontFamily: "'Tajawal', sans-serif" }}
       onClick={onClose}>
-      <motion.div initial={{ opacity: 0, y: 20, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }}
+      
+      <motion.div 
+        initial={{ opacity: 0, y: 30, scale: 0.96 }} 
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, y: 30, scale: 0.96 }}
         onClick={e => e.stopPropagation()}
-        className="flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
-
+        className="flex h-[90vh] w-full max-w-6xl flex-col overflow-hidden rounded-3xl bg-white shadow-2xl border border-slate-100">
+        
         {/* Header */}
-        <div className="flex items-center justify-between border-b border-slate-100 p-5">
+        <div className="flex items-center justify-between border-b border-slate-150 px-6 py-5 bg-gradient-to-r from-slate-50 to-white">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50">
-              <PlusCircle className="h-5 w-5 text-blue-600" />
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-600 shadow-inner">
+              <Table2 className="h-5 w-5" />
             </div>
             <div>
-              <h2 className="text-base font-black text-slate-900">إدخال يدوي — جدول كشف</h2>
-              <p className="text-xs font-bold text-slate-400">{clientName} · كل الصفوف تُحفظ ككشف واحد</p>
+              <h2 className="text-base font-black text-slate-800">إدخال البيانات يدوياً (Excel Grid)</h2>
+              <p className="text-xs font-bold text-slate-400">عميل: {clientName} • يمكنك تفصيل الأعمدة والصفوف وربطها بالمعاينة</p>
             </div>
           </div>
-          <button onClick={onClose} className="rounded-lg p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600">
+          <button onClick={onClose} className="rounded-xl p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600">
             <X className="h-5 w-5" />
           </button>
         </div>
 
-        {/* Channel (بنود) toggles */}
-        <div className="border-b border-slate-100 bg-slate-50/60 px-5 py-3">
-          <p className="mb-2 text-[11px] font-black text-slate-500">اختر البنود التي تريد إدخالها (يمكنك إظهار أو إخفاء أي عمود):</p>
-          <div className="flex flex-wrap gap-2">
-            {PAYMENTS.map(p => {
-              const on = activeChannels.includes(p.key);
-              return (
-                <button key={p.key} type="button" onClick={() => toggleChannel(p.key)}
-                  className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-bold transition-all
-                    ${on ? "border-blue-300 bg-blue-50 text-blue-700" : "border-slate-200 bg-white text-slate-500 hover:border-blue-300"}`}>
-                  {on ? <Check className="h-3 w-3" /> : <Plus className="h-3 w-3" />}
-                  {p.label}
-                </button>
-              );
-            })}
+        {/* Info Tip banner */}
+        <div className="flex items-start gap-2.5 bg-blue-50/50 border-b border-blue-100 px-6 py-3">
+          <Info className="h-4 w-4 text-blue-500 flex-shrink-0 mt-0.5" />
+          <p className="text-[11px] font-bold text-blue-700 leading-relaxed">
+            اكتب العناوين التي تريدها للأعمدة (مثال: التاريخ، كاش، فيزا، الفرع، القسم) واملأ السجلات. بعد ذلك، انقر على "معاينة واعتماد البيانات" لتحديد كيفية ربط كل عمود بالحقول البرمجية (مثل طرق الدفع أو الفروع).
+          </p>
+        </div>
+
+        {/* Grid body */}
+        <div className="flex-1 overflow-auto bg-slate-50/50 px-6 py-5">
+          <div className="min-w-full inline-block align-middle">
+            <div className="overflow-hidden border border-slate-200 bg-white rounded-2xl shadow-sm">
+              <table className="min-w-full border-collapse text-right">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-200">
+                    <th className="w-12 border-l border-slate-200 px-3 py-3 text-center text-xs font-black text-slate-400">#</th>
+                    {headers.map((h, colIdx) => (
+                      <th key={colIdx} className="border-l border-slate-200 p-2 min-w-[140px] relative group">
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="text"
+                            value={h}
+                            onChange={e => updateHeader(colIdx, e.target.value)}
+                            placeholder={`عمود ${colIdx + 1}`}
+                            className="w-full bg-transparent font-black text-slate-800 text-xs outline-none border-b border-transparent focus:border-blue-500 pb-0.5 text-right font-sans"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => removeColumn(colIdx)}
+                            title="حذف العمود"
+                            className="opacity-0 group-hover:opacity-100 rounded-lg p-1 text-slate-400 hover:bg-red-50 hover:text-red-500 transition-all">
+                            <Trash2 className="h-3 w-3" />
+                          </button>
+                        </div>
+                      </th>
+                    ))}
+                    <th className="w-16 p-2 text-center">
+                      <button
+                        type="button"
+                        onClick={addColumn}
+                        title="إضافة عمود جديد"
+                        className="inline-flex items-center gap-1 rounded-lg bg-blue-50 px-2 py-1 text-[10px] font-black text-blue-600 transition-colors hover:bg-blue-100">
+                        <Plus className="h-3.5 w-3.5" />
+                        عمود
+                      </button>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {rows.map((row, rowIdx) => (
+                    <tr key={rowIdx} className="hover:bg-slate-50/50 transition-colors">
+                      <td className="border-l border-slate-200 px-3 py-2 text-center text-[11px] font-black text-slate-400 bg-slate-50/30">
+                        {rowIdx + 1}
+                      </td>
+                      {row.map((cell, colIdx) => (
+                        <td key={colIdx} className="border-l border-slate-200 p-1">
+                          <input
+                            type="text"
+                            value={cell}
+                            onChange={e => updateCell(rowIdx, colIdx, e.target.value)}
+                            placeholder="—"
+                            className="w-full rounded-lg border border-transparent bg-transparent px-2.5 py-1.5 text-xs font-bold text-slate-700 outline-none hover:bg-slate-100/50 focus:border-blue-300 focus:bg-blue-50/50 focus:text-slate-900 transition-all"
+                          />
+                        </td>
+                      ))}
+                      <td className="p-1 text-center">
+                        <button
+                          type="button"
+                          onClick={() => removeRow(rowIdx)}
+                          title="حذف الصف"
+                          className="rounded-lg p-1.5 text-slate-300 hover:bg-red-50 hover:text-red-500 transition-all">
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Row actions */}
+            <div className="mt-4 flex items-center gap-3">
+              <button
+                type="button"
+                onClick={addRow}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-slate-900 px-4 py-2.5 text-xs font-black text-white shadow hover:bg-slate-800 transition-all">
+                <Plus className="h-4 w-4" />
+                إضافة صف جديد
+              </button>
+              <button
+                type="button"
+                onClick={clearGrid}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 text-xs font-bold text-slate-500 hover:bg-slate-100 hover:text-slate-700 transition-all">
+                مسح الجدول
+              </button>
+            </div>
           </div>
         </div>
 
-        {/* Grid */}
-        <form onSubmit={handleSubmit} className="flex flex-1 flex-col overflow-hidden">
-          <div className="flex-1 overflow-auto px-5 py-4">
-            <table className="w-full border-separate border-spacing-0 text-right">
-              <thead>
-                <tr className="text-[11px] font-black text-slate-500">
-                  <Th className="w-8">#</Th>
-                  <Th>التاريخ</Th>
-                  <Th>الفرع</Th>
-                  <Th>نوع الطلب</Th>
-                  <Th>الكاشير</Th>
-                  <Th>القسم</Th>
-                  {orderedChannels.map(c => <Th key={c.key}>{c.label}</Th>)}
-                  <Th>الإجمالي</Th>
-                  <Th className="w-10"></Th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r, idx) => (
-                  <tr key={r.id} className="group">
-                    <Td className="text-center text-[11px] font-black text-slate-400">{idx + 1}</Td>
-                    <Td>
-                      <input type="date" value={r.date} onChange={e => updateRow(r.id, { date: e.target.value })}
-                        className={inputCls} />
-                    </Td>
-                    <Td>
-                      <select value={r.branch} onChange={e => updateRow(r.id, { branch: e.target.value })} className={inputCls}>
-                        {BRANCHES.map(b => <option key={b.code} value={b.code}>{b.ar}</option>)}
-                      </select>
-                    </Td>
-                    <Td>
-                      <select value={r.cat} onChange={e => updateRow(r.id, { cat: e.target.value })} className={inputCls}>
-                        {CATS.map(c => <option key={c.code} value={c.code}>{c.ar}</option>)}
-                      </select>
-                    </Td>
-                    <Td>
-                      <input value={r.cashier} onChange={e => updateRow(r.id, { cashier: e.target.value })}
-                        placeholder="عام" className={inputCls} />
-                    </Td>
-                    <Td>
-                      <input value={r.dept} onChange={e => updateRow(r.id, { dept: e.target.value })}
-                        placeholder="عام" className={inputCls} />
-                    </Td>
-                    {orderedChannels.map(c => (
-                      <Td key={c.key}>
-                        <input type="number" inputMode="decimal" min="0" step="0.01"
-                          value={r.amounts[c.key] ?? ""} onChange={e => updateAmount(r.id, c.key, e.target.value)}
-                          placeholder="0" className={`${inputCls} text-left`} />
-                      </Td>
-                    ))}
-                    <Td className="whitespace-nowrap text-left text-xs font-black text-blue-700">
-                      {rowTotal(r).toLocaleString()}
-                    </Td>
-                    <Td className="text-center">
-                      <button type="button" onClick={() => removeRow(r.id)} title="حذف الصف"
-                        className="rounded-lg p-1.5 text-slate-300 transition-colors hover:bg-red-50 hover:text-red-500">
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    </Td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-
-            <button type="button" onClick={addRow}
-              className="mt-3 inline-flex items-center gap-1.5 rounded-xl border border-dashed border-slate-300 px-3 py-2 text-xs font-bold text-slate-500 transition-all hover:border-blue-400 hover:text-blue-600">
-              <Plus className="h-3.5 w-3.5" />
-              إضافة صف
-            </button>
-          </div>
-
-          {/* Footer */}
-          <div className="border-t border-slate-100 p-5">
-            {err && <p className="mb-3 text-xs font-bold text-red-600">{err}</p>}
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2 rounded-2xl border border-blue-100 bg-blue-50 px-4 py-2.5">
-                <span className="text-xs font-bold text-blue-700">إجمالي الكشف ({filledCount} صف):</span>
-                <span className="text-lg font-black text-blue-800">{grandTotal.toLocaleString()} د.أ</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <button type="button" onClick={onClose}
-                  className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-bold text-slate-600 transition-all hover:bg-slate-50">
-                  إلغاء
-                </button>
-                <button type="submit" disabled={saving}
-                  className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-black text-white shadow-lg transition-all hover:bg-blue-500 disabled:opacity-50">
-                  {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-                  حفظ الكشف
-                </button>
-              </div>
+        {/* Footer controls */}
+        <div className="border-t border-slate-150 px-6 py-5 bg-gradient-to-r from-white to-slate-50">
+          {err && (
+            <div className="mb-4 flex items-center gap-2 rounded-xl bg-red-50 border border-red-200 px-4 py-3 text-red-700 text-xs font-bold">
+              <AlertTriangle className="h-4 w-4 flex-shrink-0 text-red-500" />
+              <span>{err}</span>
+            </div>
+          )}
+          
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-slate-400">
+              حجم الجدول الحالي: {headers.length} أعمدة • {rows.length} صفوف
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded-xl border border-slate-200 bg-white px-5 py-2.5 text-xs font-bold text-slate-600 transition-all hover:bg-slate-100">
+                إلغاء
+              </button>
+              <button
+                type="button"
+                onClick={handleProceedToPreview}
+                className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-6 py-2.5 text-xs font-black text-white shadow-lg transition-all hover:bg-blue-500">
+                <Save className="h-4 w-4" />
+                معاينة واعتماد البيانات
+              </button>
             </div>
           </div>
-        </form>
+        </div>
+
       </motion.div>
     </div>
   );
-}
-
-function Th({ children, className = "" }: { children?: React.ReactNode; className?: string }) {
-  return (
-    <th className={`sticky top-0 z-10 border-b border-slate-200 bg-slate-50 px-2 py-2 text-right ${className}`}>
-      {children}
-    </th>
-  );
-}
-
-function Td({ children, className = "" }: { children?: React.ReactNode; className?: string }) {
-  return <td className={`border-b border-slate-100 px-1.5 py-1.5 align-middle ${className}`}>{children}</td>;
 }

@@ -214,6 +214,29 @@ export function ClientDashboard() {
     }
   };
 
+  const handleDeleteBatch = async (batchId: number) => {
+    if (!window.confirm("هل أنت متأكد من حذف هذا الكشف وكل البيانات التابعة له؟ لا يمكن التراجع عن هذا الإجراء.")) return;
+    try {
+      const res = await fetch(`/api/batches/${batchId}`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" }
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        window.alert(d.error || "تعذر حذف الكشف");
+        return;
+      }
+      if (filterBatch === String(batchId)) {
+        setFilterBatch("");
+      }
+      setCachedAiInsights(null);
+      await loadData({ silent: true });
+    } catch (e) {
+      console.error(e);
+      window.alert("تعذر حذف الكشف");
+    }
+  };
+
   // Filter records
   const filteredRecords = records.filter(r => {
     let matchesMonth = true;
@@ -428,6 +451,8 @@ export function ClientDashboard() {
         filterStates={filterStates}
         onExportExcel={handleExportExcel}
         onExportPdf={handleExportPdf}
+        batches={batches}
+        onDeleteBatch={handleDeleteBatch}
       />
       {showManual && (
         <ManualEntry
