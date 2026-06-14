@@ -1,0 +1,8 @@
+{
+  "name": "Al-Markazia Financial Observatory",
+  "description": "نظام ذكي لتحليل مبيعات مطاعم المركزية وتوقع الأرباح باستخدام الذكاء الاصطناعي",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
