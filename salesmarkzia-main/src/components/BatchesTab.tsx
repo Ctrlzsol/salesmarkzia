@@ -136,7 +136,7 @@ export function BatchesTab({ batches, filterBatch, setFilterBatch, isAdmin = fal
                         </span>
                       )}
                       
-                      {isAdmin && onDeleteBatch && (
+                      {onDeleteBatch && (
                         <button
                           type="button"
                           onClick={() => onDeleteBatch(b.id)}

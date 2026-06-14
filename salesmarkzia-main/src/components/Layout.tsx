@@ -123,6 +123,22 @@ export function Layout({ data, records, client, onReset, onManualEntry, onUpdate
   const hasMoM = data.monthComparison.months.length >= 2;
   const moGrowth = data.monthComparison.avgMonthlyGrowth;
 
+  // Real span: from the earliest firstDay across all visible batches to the latest lastDay.
+  // This correctly sums up the coverage when multiple batches are uploaded.
+  const spanDays = (() => {
+    // Collect all date strings from batches (respecting the active filter)
+    const visibleBatches = filterBatch
+      ? batches.filter(b => String(b.id) === filterBatch)
+      : batches;
+    const allFirst = visibleBatches.map(b => b.firstDay).filter(Boolean) as string[];
+    const allLast  = visibleBatches.map(b => b.lastDay).filter(Boolean) as string[];
+    if (allFirst.length === 0 || allLast.length === 0) return kpis.activeDays;
+    const minDay = allFirst.sort()[0];
+    const maxDay = allLast.sort().slice(-1)[0];
+    const diff = Math.round((new Date(maxDay).getTime() - new Date(minDay).getTime()) / 86400000) + 1;
+    return diff > 0 ? diff : kpis.activeDays;
+  })();
+
   const renderTab = () => {
     switch (activeTab) {
       case "overview":    return <OverviewTab    data={data} />;
@@ -150,11 +166,11 @@ export function Layout({ data, records, client, onReset, onManualEntry, onUpdate
 
       {/* ═══════ SIDEBAR ═══════ */}
       <aside className={`fixed lg:static inset-y-0 right-0 z-30 w-64 flex-shrink-0 flex flex-col
-          bg-gradient-to-b from-[#1c1d24] via-[#14151b] to-[#0d0e12] text-white transition-transform duration-300
-          ${sidebarOpen ? "translate-x-0" : "translate-x-full"} lg:translate-x-0 border-l border-white/5`}>
+          bg-gradient-to-b from-[#252838] via-[#1e2134] to-[#181b2e] text-white transition-transform duration-300
+          ${sidebarOpen ? "translate-x-0" : "translate-x-full"} lg:translate-x-0 border-l border-white/8`}>
 
         {/* Brand: App Name */}
-        <div className="px-5 pt-6 pb-4 border-b border-white/10 bg-black/15">
+        <div className="px-5 pt-6 pb-4 border-b border-white/10 bg-white/5">
           {/* Mobile close */}
           <div className="flex items-center justify-between mb-4 lg:hidden">
             <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">القائمة الجانبية</span>
@@ -205,7 +221,7 @@ export function Layout({ data, records, client, onReset, onManualEntry, onUpdate
               ) : (
                 <div className="inline-flex items-center gap-1 rounded-lg bg-white/10 px-2 py-0.5 text-[10px] font-black text-blue-200">
                   <CalendarDays className="w-3 h-3" />
-                  <span>{calcDuration(kpis.activeDays)} تحليل</span>
+                  <span>{calcDuration(spanDays)} تحليل</span>
                 </div>
               )}
             </div>
@@ -285,7 +301,7 @@ export function Layout({ data, records, client, onReset, onManualEntry, onUpdate
         </div>
 
         {/* Quick stats + Reset */}
-        <div className="px-5 pb-6 pt-4 space-y-3 border-t border-white/10 bg-black/10 mt-auto">
+        <div className="px-5 pb-6 pt-4 space-y-3 border-t border-white/10 bg-white/3 mt-auto">
           {/* Quick stats */}
           <div className="space-y-1.5 border-b border-white/5 pb-3">
             <div className="flex items-center justify-between text-[10px]">
@@ -438,7 +454,7 @@ export function Layout({ data, records, client, onReset, onManualEntry, onUpdate
                 ? (moGrowth >= 0 ? <Zap className="w-3.5 h-3.5 text-emerald-600" /> : <TrendingDown className="w-3.5 h-3.5 text-red-500" />)
                 : <CalendarDays className="w-3.5 h-3.5 text-blue-600" />}
               <span className={`text-sm font-black ${hasMoM ? (moGrowth >= 0 ? "text-emerald-700" : "text-red-600") : "text-blue-700"}`}>
-                {hasMoM ? `${moGrowth >= 0 ? "+" : ""}${(moGrowth * 100).toFixed(1)}٪ نمو شهري` : `تحليل ${calcDuration(kpis.activeDays)}`}
+                {hasMoM ? `${moGrowth >= 0 ? "+" : ""}${(moGrowth * 100).toFixed(1)}٪ نمو شهري` : `تحليل ${calcDuration(spanDays)}`}
               </span>
             </div>
           </div>
